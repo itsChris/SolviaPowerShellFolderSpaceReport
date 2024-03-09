@@ -86,10 +86,15 @@ function DetermineFolderSizes {
 function CreateReport {
     param (
         [Parameter(Mandatory = $true)]
-        [System.Collections.Generic.List[Object]]$FolderData
+        [System.Collections.Generic.List[Object]]$FolderData, 
+        [Parameter(Mandatory = $true)]
+        [string]$HtmlReportPath
     )
 
-    $htmlReportPath = "FolderSizeReport.html"
+    # create folder if not exists
+    if (-not (Test-Path -Path $HtmlReportPath -PathType Container)) {
+        New-Item -Path $HtmlReportPath -ItemType Directory -Force
+    }
 
     $htmlContent = @"
     <!DOCTYPE html>
@@ -159,6 +164,15 @@ function CreateReport {
         tr:hover {
             background-color: #f5f5f5;
         }
+        th:hover {
+            cursor: pointer;
+        }
+        .sort-asc::after {
+            content: " ▲";
+        }
+        .sort-desc::after {
+            content: " ▼";
+        }
         .footer {
             text-align: center;
             margin-top: 30px;
@@ -166,19 +180,79 @@ function CreateReport {
             color: var(--text-color);
         }
     </style>
+
+    <script>
+    function sortTable(tableId, columnIndex) {
+        var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
+        table = document.getElementById(tableId);
+        switching = true;
+        //Set the sorting direction to ascending:
+        dir = "asc";
+        // Make a loop that will continue until no switching has been done:
+        while (switching) {
+            // Start by saying: no switching is done:
+            switching = false;
+            rows = table.getElementsByTagName("TR");
+            // Loop through all table rows (except the first, which contains table headers):
+            for (i = 1; i < (rows.length - 1); i++) {
+                // Start by saying there should be no switching:
+                shouldSwitch = false;
+                // Get the two elements you want to compare, one from current row and one from the next:
+                x = rows[i].getElementsByTagName("TD")[columnIndex];
+                y = rows[i + 1].getElementsByTagName("TD")[columnIndex];
+                // Check if the two rows should switch place, based on the direction, asc or desc:
+                if (dir == "asc") {
+                    if (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {
+                        shouldSwitch = true;
+                        break;
+                    }
+                } else if (dir == "desc") {
+                    if (x.innerHTML.toLowerCase() < y.innerHTML.toLowerCase()) {
+                        shouldSwitch = true;
+                        break;
+                    }
+                }
+            }
+            if (shouldSwitch) {
+                // If a switch has been marked, make the switch and mark that a switch has been done:
+                rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
+                switching = true;
+                switchcount++;
+            } else {
+                // If no switching has been done AND the direction is "asc",
+                // set the direction to "desc" and run the while loop again.
+                if (switchcount == 0 && dir == "asc") {
+                    dir = "desc";
+                    switching = true;
+                }
+            }
+        }
+        // Remove previous sort indicators
+        var allTh = table.getElementsByTagName("TH");
+        for (var i = 0; i < allTh.length; i++) {
+            allTh[i].classList.remove("sort-asc", "sort-desc");
+        }
+        // Add the sort indicator to the current column header
+        var header = rows[0].getElementsByTagName("TH")[columnIndex];
+        var newClass = dir === "asc" ? "sort-asc" : "sort-desc";
+        header.classList.add(newClass);
+    }
+    </script>
+
+
 </head>
 <body>
     <div class="container">
         <img src="assets/solvia.svg" alt="Logo" class="logo">
         <h1>Folder Size Report</h1>
-        <table>
-            <thead>
-                <tr>
-                    <th>Name</th>
-                    <th>Path</th>
-                    <th>Size (GB)</th>
-                </tr>
-            </thead>
+        <table id="myTable">
+        <thead>
+            <tr>
+                <th onclick="sortTable('myTable', 0)">Name</th>
+                <th onclick="sortTable('myTable', 1)">Path</th>
+                <th onclick="sortTable('myTable', 2)">Size (GB)</th>
+            </tr>
+        </thead>
             <tbody>
 "@
 
@@ -204,9 +278,22 @@ function CreateReport {
 </html>
 "@
 
-    $htmlContent | Out-File $htmlReportPath -Encoding UTF8
-    Write-Host "Report generated at: $htmlReportPath"
-}
+    # create filename with datetime stamp
+    $htmlReportPathFile = $HtmlReportPath + "\FolderSizeReport_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".html"
+    $htmlContent | Out-File $htmlReportPathFile -Encoding UTF8
 
-$folderdata = DetermineFolderSizes -FolderEntryPoint "C:\Solvia" -Depth 3
-CreateReport -FolderData $folderdata
+    # copy logo to report folder
+    $logoPath = $HtmlReportPath + "\assets\solvia.svg"
+    if (-not (Test-Path -Path $logoPath)) {
+        New-Item -Path $HtmlReportPath\assets -ItemType Directory -Force
+        Copy-Item -Path ".\assets\solvia.svg" -Destination $HtmlReportPath\assets -Force
+    }
+
+    $csvReportPathFile = $HtmlReportPath + "\FolderSizeReport_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".csv"
+    $FolderData | Export-Csv -NoTypeInformation -Path $csvReportPathFile -Encoding UTF8 -Delimiter ";"
+
+    Write-Host "Report generated at: $htmlReportPathFile"
+    Write-Host "CSV report generated at: $csvReportPathFile"
+}
+$folderdata = DetermineFolderSizes -FolderEntryPoint C:\Solvia -Depth 1
+CreateReport -FolderData $folderdata -HtmlReportPath C:\Reports
