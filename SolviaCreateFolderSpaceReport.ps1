@@ -38,59 +38,65 @@ function DetermineFolderSizes {
         $Depth
     )
 
-    # Create an empty collection
-    $folderDetailsCollection = @()
+    # Create an ArrayList for better performance and correct scoping behavior
+    $folderDetailsCollection = New-Object System.Collections.ArrayList
 
-    # This internal function traverses the directories up to the specified depth and calculates their sizes.
+    # Calculate and add root folder summary
+    function AddRootFolderSummary {
+        $rootDirSize = Get-ChildItem -Path $FolderEntryPoint -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue
+
+        $rootFolderDetails = [PSCustomObject]@{
+            "Name"   = (Get-Item -Path $FolderEntryPoint).Name
+            "Path"   = $FolderEntryPoint
+            "SizeMB" = [Math]::Round(($rootDirSize.Sum / 1MB), 2)
+            "Depth"  = 0
+        }
+
+        [void]$folderDetailsCollection.Add($rootFolderDetails)
+    }
+
     function Get-SizeRecursively {
         param (
             [string]
             $CurrentPath,
-
             [int]
             $CurrentDepth
         )
 
-        # Guard clause to ensure we don't exceed the specified depth.
         if ($CurrentDepth -gt $Depth) {
             return
         }
 
         try {
-            # Get directories at the current path.
             $directories = Get-ChildItem -Path $CurrentPath -Directory -ErrorAction Stop
 
             foreach ($directory in $directories) {
                 $dirSize = Get-ChildItem -Path $directory.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue
-
+            
                 $folderDetails = [PSCustomObject]@{
-                    "Name"   = $directory.Name
-                    "Path"   = $directory.FullName
-                    "SizeGB" = [Math]::Round(($dirSize.Sum / 1GB), 2)
-                    "Depth"  = $CurrentDepth
+                    Name   = $directory.Name
+                    Path   = $directory.FullName
+                    SizeMB = [Math]::Round(($dirSize.Sum / 1MB), 2)
+                    Depth  = $CurrentDepth + 1 # Adjusted to reflect correct depth
                 }
-
-                # Add the folder details to the collection.
-                write-host "Adding folder: $($folderDetails.Name) with size: $($folderDetails.SizeGB) GB"
-                $folderDetailsCollection += $folderDetail
-                Write-Host $folderDetailsCollection.Count
-
-                # # Output the current folder's details
-                # $folderDetails
-
-                # Recursive call to process subdirectories, increasing the depth.
+            
+                [void]$folderDetailsCollection.Add($folderDetails)
+            
                 Get-SizeRecursively -CurrentPath $directory.FullName -CurrentDepth ($CurrentDepth + 1)
             }
+            
         }
         catch {
             Write-Warning "An error occurred processing ${CurrentPath}: $_"
         }
     }
 
-    # Start the recursive directory size calculation.
+    # Add summary for the root folder
+    AddRootFolderSummary
+
+    # Start the recursive directory size calculation
     Get-SizeRecursively -CurrentPath $FolderEntryPoint -CurrentDepth 1
 
-    # Return the collection of folder details.
     return $folderDetailsCollection
 }
 
@@ -99,12 +105,12 @@ function CreateReport {
         [Parameter(Mandatory = $true)]
         [System.Collections.Generic.List[Object]]$FolderData, 
         [Parameter(Mandatory = $true)]
-        [string]$HtmlReportPath
+        [string]$ReportPath
     )
 
     # create folder if not exists
-    if (-not (Test-Path -Path $HtmlReportPath -PathType Container)) {
-        New-Item -Path $HtmlReportPath -ItemType Directory -Force
+    if (-not (Test-Path -Path $ReportPath -PathType Container)) {
+        New-Item -Path $ReportPath -ItemType Directory -Force
     }
 
     $htmlContent = @"
@@ -193,11 +199,11 @@ function CreateReport {
     </style>
 
     <script>
-    function sortTable(tableId, columnIndex) {
+    function sortTable(tableId, col) {
         var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
         table = document.getElementById(tableId);
         switching = true;
-        //Set the sorting direction to ascending:
+        // Set the sorting direction to ascending:
         dir = "asc";
         // Make a loop that will continue until no switching has been done:
         while (switching) {
@@ -209,18 +215,36 @@ function CreateReport {
                 // Start by saying there should be no switching:
                 shouldSwitch = false;
                 // Get the two elements you want to compare, one from current row and one from the next:
-                x = rows[i].getElementsByTagName("TD")[columnIndex];
-                y = rows[i + 1].getElementsByTagName("TD")[columnIndex];
-                // Check if the two rows should switch place, based on the direction, asc or desc:
+                x = rows[i].getElementsByTagName("TD")[col];
+                y = rows[i + 1].getElementsByTagName("TD")[col];
+                // Check if the two rows should switch place:
                 if (dir == "asc") {
-                    if (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {
-                        shouldSwitch = true;
-                        break;
+                    if (!isNaN(parseFloat(x.innerHTML)) && !isNaN(parseFloat(y.innerHTML))) {
+                        // Numeric comparison
+                        if (parseFloat(x.innerHTML) > parseFloat(y.innerHTML)) {
+                            shouldSwitch = true;
+                            break;
+                        }
+                    } else {
+                        // String comparison
+                        if (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {
+                            shouldSwitch = true;
+                            break;
+                        }
                     }
                 } else if (dir == "desc") {
-                    if (x.innerHTML.toLowerCase() < y.innerHTML.toLowerCase()) {
-                        shouldSwitch = true;
-                        break;
+                    if (!isNaN(parseFloat(x.innerHTML)) && !isNaN(parseFloat(y.innerHTML))) {
+                        // Numeric comparison
+                        if (parseFloat(x.innerHTML) < parseFloat(y.innerHTML)) {
+                            shouldSwitch = true;
+                            break;
+                        }
+                    } else {
+                        // String comparison
+                        if (x.innerHTML.toLowerCase() < y.innerHTML.toLowerCase()) {
+                            shouldSwitch = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -228,25 +252,16 @@ function CreateReport {
                 // If a switch has been marked, make the switch and mark that a switch has been done:
                 rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
                 switching = true;
-                switchcount++;
+                // Each time a switch is completed, increase this count by 1:
+                switchcount++;      
             } else {
-                // If no switching has been done AND the direction is "asc",
-                // set the direction to "desc" and run the while loop again.
+                // If no switching has been done AND the direction is "asc", set the direction to "desc" and run the while loop again.
                 if (switchcount == 0 && dir == "asc") {
                     dir = "desc";
                     switching = true;
                 }
             }
         }
-        // Remove previous sort indicators
-        var allTh = table.getElementsByTagName("TH");
-        for (var i = 0; i < allTh.length; i++) {
-            allTh[i].classList.remove("sort-asc", "sort-desc");
-        }
-        // Add the sort indicator to the current column header
-        var header = rows[0].getElementsByTagName("TH")[columnIndex];
-        var newClass = dir === "asc" ? "sort-asc" : "sort-desc";
-        header.classList.add(newClass);
     }
     </script>
 
@@ -261,7 +276,7 @@ function CreateReport {
             <tr>
                 <th onclick="sortTable('myTable', 0)">Name</th>
                 <th onclick="sortTable('myTable', 1)">Path</th>
-                <th onclick="sortTable('myTable', 2)">Size (GB)</th>
+                <th onclick="sortTable('myTable', 2)">Size (MB)</th>
             </tr>
         </thead>
             <tbody>
@@ -272,7 +287,7 @@ function CreateReport {
                 <tr>
                     <td>$($folder.Name)</td>
                     <td>$($folder.Path)</td>
-                    <td>$($folder.SizeGB)</td>
+                    <td>$($folder.SizeMB)</td>
                 </tr>
 "@
     }
@@ -290,21 +305,21 @@ function CreateReport {
 "@
 
     # create filename with datetime stamp
-    $htmlReportPathFile = $HtmlReportPath + "\FolderSizeReport_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".html"
-    $htmlContent | Out-File $htmlReportPathFile -Encoding UTF8
+    $ReportPathFile = $ReportPath + "\FolderSizeReport_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".html"
+    $htmlContent | Out-File $ReportPathFile -Encoding UTF8
 
     # copy logo to report folder
-    $logoPath = $HtmlReportPath + "\assets\solvia.svg"
+    $logoPath = $ReportPath + "\assets\solvia.svg"
     if (-not (Test-Path -Path $logoPath)) {
-        New-Item -Path $HtmlReportPath\assets -ItemType Directory -Force
-        Copy-Item -Path ".\assets\solvia.svg" -Destination $HtmlReportPath\assets -Force
+        New-Item -Path $ReportPath\assets -ItemType Directory -Force
+        Copy-Item -Path ".\assets\solvia.svg" -Destination $ReportPath\assets -Force
     }
 
-    $csvReportPathFile = $HtmlReportPath + "\FolderSizeReport_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".csv"
+    $csvReportPathFile = $ReportPath + "\FolderSizeReport_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".csv"
     $FolderData | Export-Csv -NoTypeInformation -Path $csvReportPathFile -Encoding UTF8 -Delimiter ";"
 
-    Write-Host "Report generated at: $htmlReportPathFile"
+    Write-Host "Report generated at: $ReportPathFile"
     Write-Host "CSV report generated at: $csvReportPathFile"
 }
-$folderdata = DetermineFolderSizes -FolderEntryPoint C:\Solvia -Depth 2
-CreateReport -FolderData $folderdata -HtmlReportPath C:\Reports
+$folderdata = DetermineFolderSizes -FolderEntryPoint C:\windows -Depth 1
+CreateReport -FolderData $folderdata -ReportPath C:\Reports
