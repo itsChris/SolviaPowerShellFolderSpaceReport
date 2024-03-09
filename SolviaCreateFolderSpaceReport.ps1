@@ -19,8 +19,8 @@ This script is designed for internal use at Solvia GmbH and tailored to specific
 
 .EXAMPLE
 # Example usage:
-$folderData = DetermineFolderSizes -FolderEntryPoint "D:\CompanyData\Refolio\Mitarbeitende" -Depth 2
-CreateReport -FolderData $folderData
+$folderData = DetermineFolderSizes -FolderEntryPoint "D:\CompanyData\Refolio\Mitarbeitende" -Depth 2 
+CreateReport -FolderData $folderData -HtmlReportPath "C:\Reports"
 This example calculates the sizes of folders starting from "D:\CompanyData\Refolio\Mitarbeitende" up to two levels deep and then generates an HTML report.
 
 #>
@@ -37,6 +37,9 @@ function DetermineFolderSizes {
         [int]
         $Depth
     )
+
+    # Create an empty collection
+    $folderDetailsCollection = @()
 
     # This internal function traverses the directories up to the specified depth and calculates their sizes.
     function Get-SizeRecursively {
@@ -67,8 +70,13 @@ function DetermineFolderSizes {
                     "Depth"  = $CurrentDepth
                 }
 
-                # Output the current folder's details
-                $folderDetails
+                # Add the folder details to the collection.
+                write-host "Adding folder: $($folderDetails.Name) with size: $($folderDetails.SizeGB) GB"
+                $folderDetailsCollection += $folderDetail
+                Write-Host $folderDetailsCollection.Count
+
+                # # Output the current folder's details
+                # $folderDetails
 
                 # Recursive call to process subdirectories, increasing the depth.
                 Get-SizeRecursively -CurrentPath $directory.FullName -CurrentDepth ($CurrentDepth + 1)
@@ -81,6 +89,9 @@ function DetermineFolderSizes {
 
     # Start the recursive directory size calculation.
     Get-SizeRecursively -CurrentPath $FolderEntryPoint -CurrentDepth 1
+
+    # Return the collection of folder details.
+    return $folderDetailsCollection
 }
 
 function CreateReport {
@@ -295,5 +306,5 @@ function CreateReport {
     Write-Host "Report generated at: $htmlReportPathFile"
     Write-Host "CSV report generated at: $csvReportPathFile"
 }
-$folderdata = DetermineFolderSizes -FolderEntryPoint C:\Solvia -Depth 1
+$folderdata = DetermineFolderSizes -FolderEntryPoint C:\Solvia -Depth 2
 CreateReport -FolderData $folderdata -HtmlReportPath C:\Reports
